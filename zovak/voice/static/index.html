@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ZOVAK | Local GPT-Live Voice Test</title>
+  <style>
+    :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { background: #10151a; color: #ebf2f4; max-width: 780px; padding: 24px; margin: auto; line-height: 1.45; }
+    h1 { margin-bottom: 0; font-size: 1.8rem; } p { color: #b6c5cc; }
+    .card { background: #19242c; border: 1px solid #30434a; border-radius: 14px; padding: 18px; margin: 16px 0; }
+    button { border: 0; border-radius: 9px; padding: 10px 14px; margin: 4px 6px 4px 0; font-weight: 650; cursor: pointer; background: #58ceb2; color: #0c2120; }
+    button.secondary { background: #374955; color: #e5f1f3; } button:disabled { opacity: .45; cursor: not-allowed; }
+    #transcript { max-height: 280px; min-height: 100px; overflow: auto; white-space: pre-wrap; font-size: 14px; }
+    #proposals { margin-top: 12px; } .pending { border-top: 1px solid #354950; padding-top: 12px; margin-top: 12px; }
+    code { background: #263640; padding: 3px 5px; border-radius: 5px; }
+    small { color: #9eb2ba; } #status { color: #b5e9da; } .error { color: #ffaaa7!important; }
+  </style>
+</head>
+<body>
+  <h1>ZOVAK — Live Voice Demo</h1>
+  <p>GPT-Live (WebRTC) + Python client delegation + existing mock scheduler. Local development only.</p>
+  <div class="card">
+    <strong id="status">Disconnected</strong><br />
+    <button id="start">Start voice conversation</button>
+    <button id="mute" class="secondary" disabled>Mute mic</button>
+    <button id="stop" class="secondary" disabled>End call</button><br />
+    <small>Allow your browser microphone and audio playback. Use headphones to avoid feedback.</small>
+    <audio id="remote" autoplay controls style="display:block;width:100%;margin-top:10px"></audio>
+  </div>
+  <div class="card"><strong>Transcript fragments</strong><div id="transcript"></div></div>
+  <div class="card">
+    <strong>Real mock-scheduler proposals</strong>
+    <p>Ask for a consultation on a future date. The AI will politely ask if you are sure. Say “Yes, confirm my appointment” to approve verbally. This voice demo does not expose a one-click confirmation shortcut.</p>
+    <div id="proposals">Start a call to view proposals.</div>
+  </div>
+  <p><small>Development limitations: no Google Calendar, no persistent bookings, no actual phone calls, no user authentication. GPT-Live voice sessions are billed. This page is not safe for public deployment.</small></p>
+<script type="module">
+const start = document.querySelector('#start');
+const stop = document.querySelector('#stop');
+const mute = document.querySelector('#mute');
+const status = document.querySelector('#status');
+const transcript = document.querySelector('#transcript');
+const proposals = document.querySelector('#proposals');
+const audio = document.querySelector('#remote');
+let pc, channel, micStream, conversationId, interval, endTimeout, sessionReady=false;
+let closing=false;
+function setStatus(text, error=false) { status.textContent=text;status.classList.toggle('error',error); }
+function clearResources() {
+  clearInterval(interval); clearTimeout(endTimeout);
+  micStream?.getTracks().forEach(t=>t.stop());
+  channel?.close(); pc?.close(); audio.srcObject=null;
+  pc=null; channel=null; micStream=null; conversationId=null;
+  closing=false; sessionReady=false;
+  start.disabled=false; stop.disabled=true; mute.disabled=true;
+  mute.textContent='Mute mic';
+}
+function append(role, chunk) {
+  const prefix = role==='user' ? 'You: ' : 'ZOVAK: ';
+  const last = transcript.lastElementChild;
+  if (last && last.dataset.role===role) last.textContent += chunk;
+  else { const p=document.createElement('p');p.dataset.role=role;p.textContent=prefix+chunk; transcript.appendChild(p); }
+  if(transcript.children.length>100) transcript.removeChild(transcript.firstElementChild);
+  transcript.scrollTop=transcript.scrollHeight;
+}
+async function getProposals() {
+  if (!conversationId) return;
+  try {
+    const response=await fetch(`/api/v1/dev/voice/proposals?conversation_id=${encodeURIComponent(conversationId)}`);
+    if (!response.ok) return;
+    const data=await response.json();
+    proposals.replaceChildren();
+    if(!data.proposals.length) { proposals.textContent='No booking proposals yet.'; return; }
+    for (const item of data.proposals) {
+      const div=document.createElement('div'); div.className='pending';
+      const info=document.createElement('div');
+      info.textContent=`${item.customer_name} | ${item.service_id} | ${item.start} | ${item.status}`;
+      div.append(info);
+      const id=document.createElement('small'); id.textContent=`Proposal ID: ${item.proposal_id}`;div.append(document.createElement('br'),id);
+      proposals.append(div);
+    }
+  } catch(e) { console.warn('Proposal poll failed',e); }
+}
+start.onclick=async()=>{
+  start.disabled=true; transcript.replaceChildren(); proposals.textContent='Connecting…';
+  setStatus('Requesting microphone…');
+  try {
+    pc = new RTCPeerConnection();
+    pc.addEventListener('track', e=>{
+      audio.srcObject=new MediaStream([e.track]);
+      audio.play().catch(()=>setStatus('Connected: select Play on the audio player'));
+    });
+    micStream = await navigator.mediaDevices.getUserMedia({audio:true});
+    for (const track of micStream.getAudioTracks()) pc.addTrack(track,micStream);
+    channel = pc.createDataChannel('oai-events');
+    channel.addEventListener('message', ({data})=>{
+      let ev; try{ev=JSON.parse(data);}catch{return;}
+      if(ev.type==='session.started') { sessionReady=true;stop.disabled=false;mute.disabled=false;setStatus('Connected — speak now'); }
+      else if(ev.type==='session.input_transcript.delta') append('user',ev.delta||'');
+      else if(ev.type==='session.output_transcript.delta') append('assistant',ev.delta||'');
+      else if(ev.type==='session.closed') {setStatus('Call ended');console.log('Final usage:',ev.usage);clearResources();}
+      else if(ev.type==='error' || ev.type==='session.error') console.error('GPT-Live event error',ev);
+    });
+    channel.addEventListener('close',()=>{ if (!closing) {setStatus('Disconnected');clearResources();}});
+    const offer=await pc.createOffer(); await pc.setLocalDescription(offer);
+    if(pc.iceGatheringState!=='complete') {
+      await new Promise((resolve,reject)=>{
+        const t=setTimeout(()=>{pc.removeEventListener('icegatheringstatechange',f); reject(new Error('ICE gathering timed out'));},12000);
+        function f(){if(pc.iceGatheringState==='complete'){clearTimeout(t);pc.removeEventListener('icegatheringstatechange',f);resolve();}}
+        pc.addEventListener('icegatheringstatechange',f);f();
+      });
+    }
+    setStatus('Creating GPT-Live session…');
+    const r=await fetch('/api/v1/dev/voice/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sdp:pc.localDescription.sdp})});
+    if(!r.ok) throw new Error(await r.text());
+    const data=await r.json(); conversationId=data.conversation_id;
+    await pc.setRemoteDescription({type:'answer',sdp:data.transport.sdp});
+    interval=setInterval(getProposals,1500); getProposals();
+    setStatus('Connecting audio…');
+  }catch(err){ console.error(err);setStatus('Connection failed: '+err.message,true);clearResources(); }
+};
+mute.onclick=()=>{
+  if(!micStream)return;
+  const track=micStream.getAudioTracks()[0];track.enabled=!track.enabled;
+  mute.textContent=track.enabled?'Mute mic':'Unmute mic';
+};
+stop.onclick=()=>{
+  if(closing)return;
+  closing=true;stop.disabled=true;mute.disabled=true;
+  setStatus('Closing and saving final usage…');
+  if(sessionReady && channel?.readyState==='open') {
+    channel.send(JSON.stringify({type:'session.close'}));
+    endTimeout=setTimeout(()=>{setStatus('Closed without final usage confirmation');clearResources();},15000);
+  } else clearResources();
+};
+</script>
+</body>
+</html>

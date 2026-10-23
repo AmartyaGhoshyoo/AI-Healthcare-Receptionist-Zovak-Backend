@@ -1,0 +1,23 @@
+services:
+  postgres:
+    image: postgres:16
+    ports: ["127.0.0.1:5432:5432"]
+    environment:
+      POSTGRES_USER: zovak
+      POSTGRES_PASSWORD: zovak # Development only, use managed secrets in prod.
+      POSTGRES_DB: zovak
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zovak -d zovak"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  redis:
+    image: redis:7-alpine
+    ports: ["127.0.0.1:6379:6379"]
+    volumes:
+      - redis_data:/data
+volumes:
+  postgres_data:
+  redis_data:
