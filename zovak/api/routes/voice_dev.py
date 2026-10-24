@@ -1,16 +1,18 @@
 """Unauthenticated LOCAL development WebRTC voice demo. Do not expose publicly."""
 import asyncio
 import logging
+from secrets import compare_digest
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from openai import APIError, AsyncOpenAI
 from pydantic import BaseModel, Field
 
 from zovak.providers.voice.gpt_live import LIVE_PROMPT
 from zovak.voice.sideband import VoiceSideband
+from zovak.services.mock_scheduler import SchedulingError
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/dev/voice", tags=["development ONLY — voice"])
@@ -77,6 +79,7 @@ async def create_voice_session(body: SDPOffer, request: Request) -> dict:
         "session": {"id": session_id},
         "transport": {"type": "webrtc", "sdp": result.transport.sdp},
         "conversation_id": conversation_id,
+        "ui_token": handler.ui_token,
     }
 
 
@@ -90,3 +93,43 @@ async def proposals(conversation_id: str, request: Request) -> dict:
         for p in scheduler._proposals.values()
         if p.tenant_id == "demo-business" and p.conversation_id == conversation_id
     ]}
+
+
+class EmailInputSubmission(BaseModel):
+    conversation_id: str = Field(min_length=1, max_length=120)
+    request_id: str = Field(min_length=1, max_length=128)
+    email: str = Field(min_length=3, max_length=254)
+
+
+def _get_authorized_voice(request: Request, conversation_id: str, authorization: str | None):
+    # LOCAL DEV ONLY. For production use signed-in users and tenant/session auth.
+    handlers = getattr(request.app.state, "voice_sidebands", {})
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, detail="Voice session token required")
+    token = authorization[7:]
+    for handler in handlers.values():
+        if (handler.conversation_id == conversation_id and not handler.closed
+                and compare_digest(handler.ui_token, token)):
+            return handler
+    raise HTTPException(403, detail="Invalid or expired voice session")
+
+
+@router.get("/email-input")
+async def get_email_input(conversation_id: str, request: Request,
+                          authorization: str | None = Header(default=None)) -> dict:
+    """Poll while calling. Show a box when state is email_required."""
+    handler = _get_authorized_voice(request, conversation_id, authorization)
+    return await handler.email_state()
+
+
+@router.post("/email-input")
+async def post_email_input(body: EmailInputSubmission, request: Request,
+                           authorization: str | None = Header(default=None)) -> dict:
+    """Confirm only the typed email. DOES NOT create or confirm a booking."""
+    handler = _get_authorized_voice(request, body.conversation_id, authorization)
+    try:
+        return await handler.submit_email(request_id=body.request_id, email=body.email)
+    except ValueError as exc:
+        raise HTTPException(422, detail=str(exc)) from exc
+    except SchedulingError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc

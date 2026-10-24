@@ -98,8 +98,12 @@ class GoogleBackedScheduler(DemoScheduler):
     async def propose(self, tenant_id: str, conversation_id: str, service_id: str,
                       start: datetime, customer_name: str,
                       customer_email: str | None = None) -> BookingProposal:
-        if not customer_email or not _EMAIL.fullmatch(customer_email) or len(customer_email) > 254:
-            raise SchedulingError("Please ask for a valid customer email address before proposing a booking")
+        # A web-voice proposal may be drafted WITHOUT an email. It cannot be
+        # confirmed until a validated address is submitted via the form.
+        if customer_email is not None and (
+            not _EMAIL.fullmatch(customer_email) or len(customer_email) > 254
+        ):
+            raise SchedulingError("Invalid customer email address")
         proposal = await super().propose(tenant_id, conversation_id, service_id, start, customer_name)
         proposal.customer_email = customer_email
         return proposal

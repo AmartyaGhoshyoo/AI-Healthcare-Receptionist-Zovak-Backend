@@ -92,6 +92,25 @@ class DemoScheduler:
             self._proposals[proposed.id] = proposed
         return proposed
 
+    async def set_proposal_email(
+        self, tenant_id: str, conversation_id: str, proposal_id: str, email: str
+    ) -> BookingProposal:
+        """Atomically attach a user-typed email to this conversation's draft."""
+        self._check_tenant(tenant_id)
+        from zovak.voice.email_form import validate_typed_email
+        validated = validate_typed_email(email)
+        async with self._lock:
+            proposal = self._proposals.get(proposal_id)
+            if (proposal is None or proposal.tenant_id != tenant_id
+                    or proposal.conversation_id != conversation_id
+                    or proposal.status != "pending"):
+                raise SchedulingError("This pending appointment is no longer available")
+            if datetime.now(timezone.utc) > proposal.expires_at:
+                proposal.status = "expired"
+                raise SchedulingError("Appointment proposal expired; please start again")
+            proposal.customer_email = validated
+            return proposal
+
     async def latest_pending(self, tenant_id: str, conversation_id: str) -> BookingProposal | None:
         self._check_tenant(tenant_id)
         async with self._lock:

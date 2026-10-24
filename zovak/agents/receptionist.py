@@ -42,6 +42,10 @@ async def propose_booking(
     start_iso must include a timezone offset, e.g. 2026-11-01T14:00:00+06:00.
     """
     try:
+        # A spoken email is untrusted in WebRTC voice mode. The browser
+        # submits the exact typed value through a separate backend route.
+        if ctx.context.email_via_form:
+            customer_email = None
         proposal = await ctx.context.scheduler.propose(
             ctx.context.tenant_id,
             ctx.context.conversation_id,
@@ -69,14 +73,22 @@ async def propose_booking(
         return f"Cannot propose booking: {exc}"
 
 
-def make_receptionist() -> Agent[AgentContext]:
+def make_receptionist(*, email_via_form: bool = False) -> Agent[AgentContext]:
+    voice_email_instructions = (
+        "In this web voice session, collect service, time and customer name only. "
+        "The backend will show an on-screen email input after you propose the "
+        "appointment. DO NOT ask for or spell out the email address aloud. "
+        "Call propose_booking without customer_email. Do not claim booking success. "
+        if email_via_form else
+        "Collect the customer email for booking; ask for clarification if unclear. "
+    )
     return Agent[AgentContext](
         name="ZOVAK Receptionist",
         model=get_settings().openai_agent_model,
         instructions=(
             "You are ZOVAK, the receptionist for a configurable appointment business. "
-            "Be concise, ask for service, date, time, customer name AND email address. "
-            "Require email before proposing an appointment. Repeat the email to the customer. "
+            "Be concise; ask for service, date, time and customer name. "
+            + voice_email_instructions +
             "Business timezone for THIS DEMO is Asia/Dhaka. "
             "Use list_services and check_availability instead of inventing availability. "
             "Use propose_booking when details are collected, but it is NOT a booking. "

@@ -42,11 +42,20 @@ async def test_busy_blocks_slot_and_other_slots_remain():
 
 
 @pytest.mark.asyncio
-async def test_requires_email_for_real_booking():
+async def test_draft_may_have_no_email_but_real_booking_requires_one():
     app = make_app()
-    scheduler = GoogleBackedScheduler(app)
-    with pytest.raises(SchedulingError, match='email'):
-        await scheduler.propose('demo-business','c1','consultation',None,'Test')
+    def transport(request):
+        if request.url.path.endswith('/freeBusy'):
+            return httpx.Response(200,json={'calendars': {'primary': {'busy': []}}})
+        return httpx.Response(404)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        scheduler = GoogleBackedScheduler(app, google_client=client)
+        day=date.today()+timedelta(days=5)
+        start=(await scheduler.available_slots('demo-business','consultation',day))[0].start
+        proposed=await scheduler.propose('demo-business','c1','consultation',start,'Test')
+        assert proposed.customer_email is None
+        with pytest.raises(SchedulingError, match='email'):
+            await scheduler.confirm('demo-business','c1',proposed.id)
 
 
 @pytest.mark.asyncio
@@ -142,11 +151,14 @@ async def test_voice_requires_explicit_approval_before_google_insert():
         async def not_called(_):
             raise AssertionError('LLM cannot perform confirmed booking')
         summary=await voice._handle_turn('I want to book',create_proposal)
-        assert 'customer@example.com' in summary
-        assert 'Are you sure' in summary
+        assert 'box on your screen' in summary
         assert not inserts
-        clarification=await voice._handle_turn('Yes',not_called)
-        assert "haven't booked" in clarification
+        clarification=await voice._handle_turn('Yes, confirm my appointment',not_called)
+        assert 'box on your screen' in clarification
+        assert not inserts
+        await voice.submit_email(request_id=voice.email_form.request_id,email='customer@example.com')
+        verified=await voice._handle_turn('I have entered my email',not_called)
+        assert 'appointment details' in verified
         assert not inserts
         reply=await voice._handle_turn('Yes, confirm my appointment',not_called)
         assert 'Google Calendar created the appointment' in reply

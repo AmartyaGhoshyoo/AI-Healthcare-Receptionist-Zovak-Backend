@@ -64,7 +64,7 @@ _DECLINE = re.compile(
 )
 _REVISION = re.compile(
     r"\b(?:change|different|instead|actually|reschedule|another time|"
-    r"make it|move it|wait|hold on|but)\b"
+    r"make it|move it|wait|hold on)\b"
 )
 
 

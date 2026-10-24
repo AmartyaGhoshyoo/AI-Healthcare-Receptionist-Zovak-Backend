@@ -49,7 +49,7 @@ async def setup_sideband():
 async def test_requires_separate_explicit_reply():
     voice, scheduler, agent_request = await setup_sideband()
     msg = await voice._handle_turn("Please book an appointment", agent_request)
-    assert "Are you sure" in msg
+    assert "box on your screen" in msg
     proposal = await scheduler.latest_pending("demo-business", "voice-test")
     assert proposal and proposal.id not in scheduler._bookings
 
@@ -57,8 +57,12 @@ async def test_requires_separate_explicit_reply():
         raise AssertionError("Confirmation should not call an LLM")
 
     msg = await voice._handle_turn("Yes", never_run_agent)
-    assert "haven't booked" in msg
+    assert "box on your screen" in msg
     assert proposal.id not in scheduler._bookings
+    msg = await voice._handle_turn("Yes, confirm my appointment", never_run_agent)
+    assert "box on your screen" in msg
+    await voice.submit_email(request_id=voice.email_form.request_id,email='test@example.com')
+    await voice._handle_turn('Email entered',never_run_agent)
     msg = await voice._handle_turn("Yes, confirm my appointment", never_run_agent)
     assert "now confirmed" in msg
     assert proposal.id in scheduler._bookings
@@ -97,7 +101,7 @@ async def test_change_request_discards_old_proposal():
     latest = await scheduler.latest_pending("demo-business", "voice-test")
     assert latest and latest.id != old.id
     assert old.id not in scheduler._proposals
-    assert "Are you sure" in msg
+    assert "box on your screen" in msg
 
 
 @pytest.mark.asyncio
