@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse
 from openai import APIError, AsyncOpenAI
 from pydantic import BaseModel, Field
 
+from zovak.agents.receptionist import today_instructions
 from zovak.providers.voice.gpt_live import LIVE_PROMPT
 from zovak.voice.sideband import VoiceSideband
 from zovak.services.mock_scheduler import SchedulingError
@@ -39,7 +40,7 @@ async def create_voice_session(body: SDPOffer, request: Request) -> dict:
             result = await client.live.create(
                 session={
                     "model": "gpt-live-1",
-                    "instructions": LIVE_PROMPT + " This is a local scheduling DEMO. Only say a booking is confirmed if verified by the backend. Avoid speaking proposal IDs aloud; let the screen display them.",
+                    "instructions": LIVE_PROMPT + " " + today_instructions() + " This is a local scheduling DEMO. Only say a booking is confirmed if verified by the backend. Avoid speaking proposal IDs aloud; let the screen display them.",
                     "delegation": {"type": "client"},
                 },
                 transport={"type": "webrtc", "sdp": body.sdp},
@@ -133,3 +134,73 @@ async def post_email_input(body: EmailInputSubmission, request: Request,
         raise HTTPException(422, detail=str(exc)) from exc
     except SchedulingError as exc:
         raise HTTPException(409, detail=str(exc)) from exc
+
+
+# ── Booking card for the website voice panel ─────────────────────────────────
+# All actions need the call's ui_token and re-check server state; none of them
+# trusts IDs beyond matching the single pending item for this call.
+
+class ProposalAction(BaseModel):
+    conversation_id: str = Field(min_length=1, max_length=120)
+    proposal_id: str = Field(min_length=1, max_length=64)
+
+
+class ChangeAction(BaseModel):
+    conversation_id: str = Field(min_length=1, max_length=120)
+    change_id: str = Field(min_length=1, max_length=64)
+
+
+class SlotPick(BaseModel):
+    conversation_id: str = Field(min_length=1, max_length=120)
+    start: str = Field(min_length=10, max_length=40)
+
+
+async def _run(action):
+    try:
+        return await action
+    except SchedulingError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
+
+
+@router.get("/booking-state")
+async def get_booking_state(conversation_id: str, request: Request,
+                            authorization: str | None = Header(default=None)) -> dict:
+    """Polled during the call: email box, confirm, booked, move or cancel card."""
+    handler = _get_authorized_voice(request, conversation_id, authorization)
+    return await handler.booking_state()
+
+
+@router.post("/confirm-booking")
+async def post_confirm_booking(body: ProposalAction, request: Request,
+                               authorization: str | None = Header(default=None)) -> dict:
+    handler = _get_authorized_voice(request, body.conversation_id, authorization)
+    return await _run(handler.confirm_booking(proposal_id=body.proposal_id))
+
+
+@router.post("/reopen-email")
+async def post_reopen_email(body: ProposalAction, request: Request,
+                            authorization: str | None = Header(default=None)) -> dict:
+    handler = _get_authorized_voice(request, body.conversation_id, authorization)
+    return await _run(handler.reopen_email(proposal_id=body.proposal_id))
+
+
+@router.post("/pick-slot")
+async def post_pick_slot(body: SlotPick, request: Request,
+                         authorization: str | None = Header(default=None)) -> dict:
+    """A time button: Nofa hears it as the caller choosing that time."""
+    handler = _get_authorized_voice(request, body.conversation_id, authorization)
+    return await _run(handler.pick_slot(start=body.start))
+
+
+@router.post("/change/confirm")
+async def post_confirm_change(body: ChangeAction, request: Request,
+                              authorization: str | None = Header(default=None)) -> dict:
+    handler = _get_authorized_voice(request, body.conversation_id, authorization)
+    return await _run(handler.confirm_change(change_id=body.change_id))
+
+
+@router.post("/change/discard")
+async def post_discard_change(body: ChangeAction, request: Request,
+                              authorization: str | None = Header(default=None)) -> dict:
+    handler = _get_authorized_voice(request, body.conversation_id, authorization)
+    return await _run(handler.discard_change(change_id=body.change_id))

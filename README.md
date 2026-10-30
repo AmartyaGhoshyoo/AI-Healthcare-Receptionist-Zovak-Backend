@@ -16,7 +16,11 @@ with OpenAI GPT-Live **client delegation** as the proposed future voice architec
 | Gmail send, Twilio SMS, Meta WhatsApp send | REST adapters implemented; credentials + routing pending |
 | GPT-Live WebRTC session factory | Helper implemented; sideband, auth and frontend pending |
 | Telephone/SIP, inbound email/chat/WhatsApp | Planned, NOT implemented |
-| Reschedule/cancel, waitlists, recovery, dashboards | Planned, NOT implemented |
+| Website booking card: typed email, Confirm booking button | Implemented for web voice + chat (dev routes) |
+| Move / cancel a booking made in the same conversation | Implemented (memory only; Google event moved/deleted) |
+| 1-hour appointment reminder email via Resend | Implemented (only while the server runs; set `RESEND_API_KEY`, `REMINDER_FROM_EMAIL`) |
+| Phone calls via GPT-Live SIP (Linphone for free testing) + one-time SMS booking form | Implemented; set `OPENAI_WEBHOOK_SECRET`, `PUBLIC_BASE_URL`; SMS goes to a dev outbox |
+| Find bookings from earlier conversations, waitlists, recovery, dashboards | Planned, NOT implemented |
 
 ## Setup (Python 3.11+)
 

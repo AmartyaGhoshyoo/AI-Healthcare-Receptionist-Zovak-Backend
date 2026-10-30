@@ -40,11 +40,13 @@ class EmailFormGate:
     request_id: str | None = None
     verified_email: str | None = None
 
-    def arm(self, proposal_id: str) -> None:
+    def arm(self, proposal_id: str, trusted_email: str | None = None) -> None:
+        """Open the email box for a new proposal. trusted_email: already typed on screen
+        earlier in this call for this patient, so it isn't asked for again."""
         if self.proposal_id != proposal_id:
             self.proposal_id = proposal_id
             self.request_id = token_urlsafe(24)
-            self.verified_email = None
+            self.verified_email = trusted_email
 
     @property
     def verified(self) -> bool:

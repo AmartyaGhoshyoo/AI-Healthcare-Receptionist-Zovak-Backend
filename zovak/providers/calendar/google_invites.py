@@ -92,3 +92,32 @@ class GoogleInvites(GoogleCalendar):
             if created.get("id") != event_id or created.get("status") == "cancelled":
                 raise RuntimeError("Google did not verify event creation")
             return event_id
+
+    async def move_event(self, *, event_id: str, start: datetime, end: datetime) -> None:
+        """Change an existing event's time; Google emails the attendee the update."""
+        if start.tzinfo is None or end.tzinfo is None or start >= end:
+            raise ValueError("Timezone-aware start < end required")
+        async with httpx.AsyncClient(timeout=15) if self._client is None else _shared(self._client) as client:
+            response = await client.patch(
+                self._url + "/events/" + quote(event_id, safe=""),
+                params={"sendUpdates": "all"}, headers=self._headers(),
+                json={"start": {"dateTime": start.isoformat()},
+                      "end": {"dateTime": end.isoformat()}},
+            )
+            response.raise_for_status()
+            moved = response.json()
+            if (moved.get("id") != event_id or moved.get("status") == "cancelled"
+                    or datetime.fromisoformat(moved["start"]["dateTime"].replace("Z", "+00:00")) != start
+                    or datetime.fromisoformat(moved["end"]["dateTime"].replace("Z", "+00:00")) != end):
+                raise RuntimeError("Google did not verify the event move")
+
+    async def cancel_event(self, *, event_id: str) -> None:
+        """Delete an event; Google emails the attendee a cancellation notice."""
+        async with httpx.AsyncClient(timeout=15) if self._client is None else _shared(self._client) as client:
+            response = await client.delete(
+                self._url + "/events/" + quote(event_id, safe=""),
+                params={"sendUpdates": "all"}, headers=self._headers(),
+            )
+            if response.status_code in (404, 410):
+                return  # already gone, e.g. a retry after a lost response
+            response.raise_for_status()

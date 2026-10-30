@@ -35,20 +35,35 @@ async def test_confirm_rejects_wrong_conversation():
 async def test_race_only_one_confirmed():
     scheduler = DemoScheduler()
     slots = await scheduler.available_slots("demo-business", "consultation", date.today() + timedelta(days=3))
+    # A pending proposal holds its slot: a second caller can't even propose it.
     proposals = await asyncio.gather(*[
         scheduler.propose("demo-business", f"c{i}", "consultation", slots[0].start, f"User {i}")
         for i in range(2)
-    ])
-    results = await asyncio.gather(*[
-        scheduler.confirm("demo-business", p.conversation_id, p.id)
-        for p in proposals
     ], return_exceptions=True)
-    assert len([r for r in results if not isinstance(r, Exception)]) == 1
-    assert len([r for r in results if isinstance(r, SchedulingError)]) == 1
+    held = [p for p in proposals if not isinstance(p, Exception)]
+    assert len(held) == 1 and isinstance(proposals[1], SchedulingError)
+    results = await asyncio.gather(*[
+        scheduler.confirm("demo-business", held[0].conversation_id, held[0].id) for _ in range(2)
+    ], return_exceptions=True)
+    assert len(scheduler._bookings) == 1  # a repeated confirm doesn't double-book
+
+
+@pytest.mark.asyncio
+async def test_hold_expires_and_frees_the_slot():
+    from datetime import timezone
+    scheduler = DemoScheduler()
+    day = date.today() + timedelta(days=3)
+    slots = await scheduler.available_slots("demo-business", "consultation", day)
+    p = await scheduler.propose("demo-business", "a", "consultation", slots[0].start, "A")
+    others = await scheduler.available_slots("demo-business", "consultation", day, conversation_id="b")
+    assert slots[0].start not in [s.start for s in others]
+    p.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    others = await scheduler.available_slots("demo-business", "consultation", day, conversation_id="b")
+    assert slots[0].start in [s.start for s in others]
 
 
 @pytest.mark.asyncio
 async def test_naive_datetimes_disallowed():
     scheduler = DemoScheduler()
     with pytest.raises(SchedulingError, match="timezone"):
-        await scheduler.propose("demo-business", "conv", "meeting", datetime(2027, 1, 1, 9), "Client")
+        await scheduler.propose("demo-business", "conv", "consultation", datetime(2027, 1, 1, 9), "Client")
